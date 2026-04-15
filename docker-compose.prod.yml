@@ -1,0 +1,191 @@
+# ══════════════════════════════════════════════════════════════
+# VendorIQ — Production Docker Compose
+# ══════════════════════════════════════════════════════════════
+# Usage:
+#   cp api/.env.example api/.env          # Fill real values
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# !! NEVER run `docker compose -f docker-compose.yml up` in prod !!
+# The base docker-compose.yml is for LOCAL DEV ONLY (no app services).
+# ══════════════════════════════════════════════════════════════
+
+version: '3.8'
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-api-env: &api-env
+  env_file: ./api/.env
+
+services:
+
+  # ── Nginx (SSL termination + reverse proxy) ───────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: vendoriq-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro # Mount Let's Encrypt certs here
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ── API Service ───────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: production
+    image: vendoriq-api:latest
+    container_name: vendoriq-api
+    <<: *api-env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      FASTAPI_URL: http://ai-service:8000
+    expose:
+      - "4000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+
+  # ── Worker Service ────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: ./worker/Dockerfile
+      target: production
+    image: vendoriq-worker:latest
+    container_name: vendoriq-worker
+    <<: *api-env
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  # ── AI Service (Python FastAPI) ───────────────────────────────
+  ai-service:
+    build:
+      context: .
+      dockerfile: ./ai-service/Dockerfile
+      target: production
+    image: vendoriq-ai:latest
+    container_name: vendoriq-ai
+    env_file: ./api/.env # Shares GEMINI_API_KEY, FASTAPI_SECRET
+    environment:
+      PORT: 8000
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://127.0.0.1:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  # ── Frontend (Next.js) ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: vendoriq-frontend:latest
+    container_name: vendoriq-frontend
+    environment:
+      NODE_ENV: production
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: https://vendoriq.in
+      NEXT_PUBLIC_SOCKET_URL: https://vendoriq.in
+      NEXT_PUBLIC_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+    expose:
+      - "3000"
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://0.0.0.0:3000" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *default-logging
+
+  # ── MongoDB (production — no exposed port) ────────────────────
+  mongo:
+    image: mongo:7
+    container_name: vendoriq-mongo
+    # !! No port mapping in production — only accessible internally !!
+    environment:
+      MONGO_INITDB_DATABASE: vendoriq
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS:?MONGO_ROOT_PASS required}
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "echo 'db.runCommand(\"ping\").ok' | mongosh 127.0.0.1:27017/vendoriq --quiet" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    command: >
+      mongod --auth --wiredTigerCacheSizeGB 1 --quiet
+
+  # ── Redis (production — no exposed port) ──────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vendoriq-redis
+    # !! No port mapping in production — only accessible internally !!
+    command: >
+      redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD required} --maxmemory 512mb --maxmemory-policy allkeys-lru --loglevel warning
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+volumes:
+  mongo_data:
+    driver: local
+  mongo_config:
+    driver: local
+  redis_data:
+    driver: local
+  nginx_logs:
+    driver: local
+
+networks:
+  default:
+    name: vendoriq-prod
+    driver: bridge
