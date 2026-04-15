@@ -1,0 +1,10 @@
+node_modules
+.env
+Dockerfile
+.dockerignore
+.git
+.github
+.agents
+.agent
+.gemini
+tmp
