@@ -1,0 +1,38 @@
+# ── Dependencies ─────────────────────────────────────────────
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.mypy_cache/
+venv/
+.venv/
+
+# ── Environment (NEVER commit) ───────────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+*.env
+ai-service/.env
+api.env
+api (1).env
+ai-service.env
+
+# ── Build outputs ─────────────────────────────────────────────
+dist/
+build/
+coverage/
+*.log
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Misc ─────────────────────────────────────────────────────
+package-lock.json
+*.lock
