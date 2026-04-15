@@ -1,0 +1,17 @@
+venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+Dockerfile
+.dockerignore
+.git
+.github
+.agents
+.agent
+.gemini
+tmp
+data
+indexes
